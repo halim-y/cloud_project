@@ -50,6 +50,7 @@ def get_outdoor_weather():
     query = f"""
         SELECT outdoor_temp, outdoor_humidity, outdoor_weather
         FROM `{BQ_TABLE}`
+        WHERE outdoor_temp IS NOT NULL
         ORDER BY date DESC, time DESC
         LIMIT 1
     """
