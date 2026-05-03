@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 import os
+from datetime import datetime, timezone, timedelta
 from google.cloud import bigquery
 import requests
 
@@ -8,9 +9,15 @@ BQ_TABLE            = f"{GCP_PROJECT}.cloud_project.weather-records"
 PASSWORD_HASH       = os.environ.get("PASSWORD_HASH", "f4f263e439cf40925e6a412387a9472a6773c2580212a4fb50d224d3a817de17")
 OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY")
 CITY                = os.environ.get("CITY", "Genève")
+TZ_OFFSET           = timedelta(hours=2)  # UTC+2 Switzerland
 
 client = bigquery.Client(project=GCP_PROJECT)
 app = Flask(__name__)
+
+
+def _get_server_time():
+    now = datetime.now(timezone.utc) + TZ_OFFSET
+    return now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S")
 
 
 def _fetch_outdoor_weather():
@@ -31,14 +38,21 @@ def send_to_bigquery():
     if body.get("passwd") != PASSWORD_HASH:
         return jsonify({"status": "error", "message": "Unauthorized"}), 401
 
-    data = body["values"]
-    data.update(_fetch_outdoor_weather())
+    data = body.get("values", {})
+    date_str, time_str = _get_server_time()
+    data["date"] = date_str
+    data["time"] = time_str
+
+    try:
+        data.update(_fetch_outdoor_weather())
+    except Exception as e:
+        return jsonify({"status": "error", "message": "weather:" + str(e)[:40]}), 500
 
     errors = client.insert_rows_json(BQ_TABLE, [data])
     if errors:
-        return jsonify({"status": "error", "errors": errors}), 500
+        return jsonify({"status": "error", "message": str(errors[0])[:60]}), 500
 
-    return jsonify({"status": "success", "data": data})
+    return jsonify({"status": "success", "server_time": time_str})
 
 
 @app.route("/get_outdoor_weather", methods=["POST"])
