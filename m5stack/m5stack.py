@@ -7,15 +7,21 @@ import utime
 import urequests
 import ujson
 import unit
+from machine import I2C, Pin
 
 # ── Constants ────────────────────────────────────────────────────────────────
-FLASK_URL     = "https://<your-cloud-run-url>.run.app"  # update after redeploy
+FLASK_URL     = "https://cloud-project-470570889014.europe-west6.run.app"
 PASSWORD_HASH = "f4f263e439cf40925e6a412387a9472a6773c2580212a4fb50d224d3a817de17"
 TZ_OFFSET     = 2  # UTC+2 (Switzerland summer time)
 
 # ── Sensors ───────────────────────────────────────────────────────────────────
-env3        = unit.get(unit.ENV3, unit.PORTA)
-tvoc_sensor = unit.get(unit.TVOC, unit.PORTB)  # adjust port to match your hardware
+env3 = unit.get(unit.ENV3, unit.PORTA)   # PORTA — I2C (GPIO 32/33)
+pir  = unit.get(unit.PIR,  unit.PORTB)   # PORTB — digital (GPIO 36/26)
+
+# TVOC on PORTC using software I2C (bit-bang) on GPIO 13 (SDA) and GPIO 14 (SCL)
+# PORTC pins on Core2 AWS are GPIO 13 and GPIO 14
+i2c_portc    = I2C(sda=Pin(13), scl=Pin(14), freq=100000)
+tvoc_sensor  = unit.get(unit.TVOC, unit.PORTC)
 
 # ── Display setup ─────────────────────────────────────────────────────────────
 setScreenColor(0x111111)
@@ -29,6 +35,7 @@ in_temp_lbl = M5TextBox(10,  65,  "Temp: --",   lcd.FONT_DejaVu18, 0xFF6600, rot
 in_humi_lbl = M5TextBox(10,  90,  "Humi: --",   lcd.FONT_DejaVu18, 0x00AAFF, rotate=0)
 in_tvoc_lbl = M5TextBox(10,  115, "TVOC: --",   lcd.FONT_DejaVu18, 0x00FF88, rotate=0)
 in_eco2_lbl = M5TextBox(10,  140, "eCO2: --",   lcd.FONT_DejaVu18, 0x00FF88, rotate=0)
+in_pir_lbl  = M5TextBox(10,  165, "Motion: --", lcd.FONT_DejaVu18, 0xFF00FF, rotate=0)
 
 out_temp_lbl    = M5TextBox(165, 65,  "Temp: --", lcd.FONT_DejaVu18, 0xFF6600, rotate=0)
 out_humi_lbl    = M5TextBox(165, 90,  "Humi: --", lcd.FONT_DejaVu18, 0x00AAFF, rotate=0)
@@ -62,7 +69,7 @@ def fetch_outdoor():
         out_weather_lbl.setText("offline")
 
 
-def send_data(date_str, time_str, temp, humi, tvoc, eco2):
+def send_data(date_str, time_str, temp, humi, tvoc, eco2, motion):
     try:
         payload = {
             "passwd": PASSWORD_HASH,
@@ -73,6 +80,7 @@ def send_data(date_str, time_str, temp, humi, tvoc, eco2):
                 "indoor_humidity":  humi,
                 "air_quality_tvoc": tvoc,
                 "air_quality_eco2": eco2,
+                "motion":           motion,
             }
         }
         resp = urequests.post(
@@ -90,7 +98,7 @@ wifiCfg.autoConnect(lcdShow=True)
 try:
     ntptime.settime()
 except:
-    pass  # continue with device clock if NTP unavailable
+    pass
 
 # ── On boot: show last known outdoor weather immediately ──────────────────────
 fetch_outdoor()
@@ -101,14 +109,17 @@ while True:
     humidity    = round(env3.humidity, 1)
     tvoc        = tvoc_sensor.TVOC
     eco2        = tvoc_sensor.eCO2
+    motion      = pir.state
+
     date_str, time_str = get_timestamp()
 
     in_temp_lbl.setText("Temp: " + str(temperature) + "C")
     in_humi_lbl.setText("Humi: " + str(humidity) + "%")
     in_tvoc_lbl.setText("TVOC: " + str(tvoc) + "ppb")
     in_eco2_lbl.setText("eCO2: " + str(eco2) + "ppm")
+    in_pir_lbl.setText("Motion: " + ("YES" if motion else "NO"))
 
-    send_data(date_str, time_str, temperature, humidity, tvoc, eco2)
+    send_data(date_str, time_str, temperature, humidity, tvoc, eco2, motion)
     fetch_outdoor()
 
     sync_lbl.setText("Synced: " + time_str)
