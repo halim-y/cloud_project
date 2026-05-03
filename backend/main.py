@@ -1,69 +1,70 @@
-#%%
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import os
 from google.cloud import bigquery
 import requests
-from datetime import datetime
 
-# You only need to uncomment the line below if you want to run your flask app locally.
-# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "path-to-service-account-key-json"
-client = bigquery.Client(project="acoustic-rider-487915-s8")
+GCP_PROJECT         = "acoustic-rider-487915-s8"
+BQ_TABLE            = f"{GCP_PROJECT}.cloud_project.weather-records"
+PASSWORD_HASH       = os.environ.get("PASSWORD_HASH", "f4f263e439cf40925e6a412387a9472a6773c2580212a4fb50d224d3a817de17")
+OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY")
+CITY                = os.environ.get("CITY", "Genève")
 
-#%%
-
-# For authentication
-
-YOUR_HASH_PASSWD = "f4f263e439cf40925e6a412387a9472a6773c2580212a4fb50d224d3a817de17" # YOUR_HASH_PASSWD
-
+client = bigquery.Client(project=GCP_PROJECT)
 app = Flask(__name__)
 
-# get the column names of the db
-q = """
-SELECT * FROM `acoustic-rider-487915-s8.cloud_project.weather-records` LIMIT 10
-"""
-query_job = client.query(q)
-df = query_job.to_dataframe()
-#%%
-@app.route('/send-to-bigquery', methods=['GET', 'POST'])
+
+def _fetch_outdoor_weather():
+    url = f"http://api.openweathermap.org/data/2.5/weather?q={CITY}&appid={OPENWEATHER_API_KEY}&units=metric"
+    resp = requests.get(url, timeout=10)
+    resp.raise_for_status()
+    body = resp.json()
+    return {
+        "outdoor_temp":     round(float(body["main"]["temp"]), 1),
+        "outdoor_humidity": round(float(body["main"]["humidity"]), 1),
+        "outdoor_weather":  body["weather"][0]["description"],
+    }
+
+
+@app.route("/send-to-bigquery", methods=["POST"])
 def send_to_bigquery():
-    if request.method == 'POST':
-        if request.get_json(force=True)["passwd"] != YOUR_HASH_PASSWD:
-            raise Exception("Incorrect Password!")
-        data = request.get_json(force=True)["values"]
-        # For exercise 2: Call the openweatherapi and add the resulting 
-        # values to the `data` dictionary
-        # data["outdoor_temp"] = ...
-        # data["outdoor_humidity"] = ...
-        # data["weather"] = ...
-        # building the query
-        q = """INSERT INTO `acoustic-rider-487915-s8.cloud_project.weather-records` 
-        """
-        names = """"""
-        values = """"""
-        for k, v in data.items():
-            names += f"""{k},"""
-            if df.dtypes[k] == float:
-                values += f"""{v},"""
-            else:
-                # string values in the query should be in single qutation!
-                values += f"""'{v}',"""
-        # remove the last comma
-        names = names[:-1]
-        values = values[:-1]
-        q = q + f""" ({names})""" + f""" VALUES({values})"""
-        query_job = client.query(q)
-        return {"status": "sucess", "data": data}
-    return {"status": "failed"}
-        
+    body = request.get_json(force=True)
+    if body.get("passwd") != PASSWORD_HASH:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
 
-# For exercise 3: Complete the following endpoint.
-# @app.route('/get_outdoor_weather', methods=['GET', 'POST'])
-# def get_outdoor_weather():
-#     if request.method == 'POST':
-#         if request.get_json(force=True)["passwd"] != YOUR_HASH_PASSWD:
-#             raise Exception("Incorrect Password!")
-#         # get the latest outdoor temp values from the db
+    data = body["values"]
+    data.update(_fetch_outdoor_weather())
+
+    errors = client.insert_rows_json(BQ_TABLE, [data])
+    if errors:
+        return jsonify({"status": "error", "errors": errors}), 500
+
+    return jsonify({"status": "success", "data": data})
 
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True)
+@app.route("/get_outdoor_weather", methods=["POST"])
+def get_outdoor_weather():
+    body = request.get_json(force=True)
+    if body.get("passwd") != PASSWORD_HASH:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+    query = f"""
+        SELECT outdoor_temp, outdoor_humidity, outdoor_weather
+        FROM `{BQ_TABLE}`
+        ORDER BY date DESC, time DESC
+        LIMIT 1
+    """
+    rows = list(client.query(query).result())
+    if not rows:
+        return jsonify({"status": "error", "message": "No data in database"}), 404
+
+    row = rows[0]
+    return jsonify({
+        "status":           "success",
+        "outdoor_temp":     row.outdoor_temp,
+        "outdoor_humidity": row.outdoor_humidity,
+        "outdoor_weather":  row.outdoor_weather,
+    })
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080, debug=True)
