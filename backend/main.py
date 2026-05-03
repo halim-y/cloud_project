@@ -47,24 +47,8 @@ def get_outdoor_weather():
     if body.get("passwd") != PASSWORD_HASH:
         return jsonify({"status": "error", "message": "Unauthorized"}), 401
 
-    query = f"""
-        SELECT outdoor_temp, outdoor_humidity, outdoor_weather
-        FROM `{BQ_TABLE}`
-        WHERE outdoor_temp IS NOT NULL
-        ORDER BY date DESC, time DESC
-        LIMIT 1
-    """
-    rows = list(client.query(query).result())
-    if not rows:
-        return jsonify({"status": "error", "message": "No data in database"}), 404
-
-    row = rows[0]
-    return jsonify({
-        "status":           "success",
-        "outdoor_temp":     row.outdoor_temp,
-        "outdoor_humidity": row.outdoor_humidity,
-        "outdoor_weather":  row.outdoor_weather,
-    })
+    outdoor = _fetch_outdoor_weather()
+    return jsonify({"status": "success", **outdoor})
 
 
 @app.route("/", methods=["GET"])
