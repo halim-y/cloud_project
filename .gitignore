@@ -6,3 +6,6 @@ PLAN.md
 __pycache__/
 *.pyc
 docs/WalkThrough.ipynb
+gcp-key.json
+.env
+/AUDIT.md
