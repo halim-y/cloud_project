@@ -5,11 +5,20 @@ import wifiCfg
 import urequests
 import ujson
 import unit
+import time
+import os
 from machine import I2C, Pin
 
 # ── Constants ────────────────────────────────────────────────────────────────
 FLASK_URL     = "https://cloud-project-470570889014.europe-west6.run.app"
 PASSWORD_HASH = "f4f263e439cf40925e6a412387a9472a6773c2580212a4fb50d224d3a817de17"
+
+# Sensor data is uploaded to BigQuery every 5 minutes, as required by the
+# assignment. The main loop polls every second so motion can trigger
+# announcements in between sends — the cadence below is still 300 s.
+SEND_INTERVAL_S     = 300   # send sensor data every 5 minutes
+ANNOUNCE_COOLDOWN_S = 3600  # at most one motion announcement per hour
+ANNOUNCE_FILE       = "/flash/announce.wav"
 
 # ── Sensors ───────────────────────────────────────────────────────────────────
 env3 = unit.get(unit.ENV3, unit.PORTA)
@@ -95,11 +104,59 @@ def send_data(temp, humi, tvoc, eco2):
         sync_lbl.setText("Sync failed")
 
 
+def play_announcement(action):
+    """Ask backend for the right announcement, save the WAV, play it.
+
+    Uses /announce-binary which returns raw WAV bytes directly (no JSON, no
+    base64 decode) — much faster on the device. A 204 No Content response
+    means the announcement condition was not met (e.g. rain reminder on a
+    sunny day) and nothing should be played."""
+    try:
+        sync_lbl.setText("Announcing...")
+        resp = urequests.post(
+            FLASK_URL + "/announce-binary",
+            data=ujson.dumps({
+                "passwd": PASSWORD_HASH,
+                "action": action,
+            }),
+            headers={"Content-Type": "application/json"}
+        )
+        status = resp.status_code
+        if status == 204:
+            resp.close()
+            sync_lbl.setText("No announcement")
+            return False
+        if status != 200:
+            resp.close()
+            sync_lbl.setText("Ann HTTP " + str(status))
+            return False
+        wav_bytes = resp.content
+        resp.close()
+        with open(ANNOUNCE_FILE, "wb") as f:
+            f.write(wav_bytes)
+        speaker.playWAV(ANNOUNCE_FILE)
+        sync_lbl.setText("Spoke: " + action[:10])
+        return True
+    except Exception as e:
+        sync_lbl.setText("Ann err: " + str(e)[:10])
+        return False
+
+
 # ── On boot: show last known outdoor weather immediately ──────────────────────
 fetch_outdoor()
 
-# ── Main loop (every 5 minutes) ───────────────────────────────────────────────
+# ── Main loop ─────────────────────────────────────────────────────────────────
+# Tight 1-second poll. The old blocking wait(300) call meant motion events
+# during the gap were lost; now motion is checked every second and the heavy
+# sensor send runs on its own timer.
+
+last_send     = -SEND_INTERVAL_S     # send immediately on first iteration
+last_announce = -ANNOUNCE_COOLDOWN_S # allow first announcement right away
+
 while True:
+    now_s = time.time()
+
+    # Always refresh the screen so it's lively
     temperature = round(env3.temperature, 1)
     humidity    = round(env3.humidity, 1)
     tvoc        = tvoc_sensor.TVOC
@@ -112,8 +169,16 @@ while True:
     in_eco2_lbl.setText("eCO2: " + str(eco2) + "ppm")
     in_pir_lbl.setText("Motion: " + ("YES" if motion else "NO"))
 
-    send_data(temperature, humidity, tvoc, eco2)
-    fetch_outdoor()
+    # Periodic sensor upload + outdoor refresh
+    if now_s - last_send >= SEND_INTERVAL_S:
+        send_data(temperature, humidity, tvoc, eco2)
+        fetch_outdoor()
+        last_send = now_s
 
-    wait(300)
+    # Motion-triggered announcement, at most once per hour
+    if motion and (now_s - last_announce) >= ANNOUNCE_COOLDOWN_S:
+        if play_announcement("motion"):
+            last_announce = now_s
+
+    wait(1)
     wait_ms(2)
