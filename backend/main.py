@@ -188,16 +188,30 @@ def voice_audio_binary():
         sample_rate = int(request.headers.get("X-Sample-Rate", "16000"))
         pcm = raw
 
+    # Defensive: any failure in transcribe/Gemini/TTS still returns 200 +
+    # a spoken "didn't catch that" so the device never has to surface a raw
+    # error to the user. We only 500 if TTS itself fails (which it won't
+    # for short fixed strings).
+    transcript = ""
     try:
         transcript = transcribe_bytes(pcm, sample_rate)
-        if not transcript:
-            reply = "I didn't catch that — could you try again?"
-            return Response(
-                synthesize_bytes(reply, fmt="wav"),
-                mimetype="audio/wav",
-                headers={"X-Transcript": "", "X-Response-Text": reply[:200]},
-            )
+    except Exception:
+        transcript = ""
+
+    if not transcript:
+        reply = "I didn't catch that — could you try again?"
+        return Response(
+            synthesize_bytes(reply, fmt="wav"),
+            mimetype="audio/wav",
+            headers={"X-Transcript": "", "X-Response-Text": reply[:200]},
+        )
+
+    try:
         answer = process_voice_query(transcript)
+    except Exception:
+        answer = "Sorry, something went wrong while I was thinking."
+
+    try:
         return Response(
             synthesize_bytes(answer, fmt="wav"),
             mimetype="audio/wav",
@@ -306,6 +320,25 @@ def latest_row():
         return jsonify({"status": "empty"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/server-time", methods=["GET"])
+def server_time():
+    """Current local time, for devices that can't sync NTP themselves
+    (the M5Stack's `ntptime` module is unreliable on some firmwares).
+    Returns year/month/day/hour/minute/second as integers."""
+    now = datetime.now(timezone.utc) + TZ_OFFSET
+    return jsonify({
+        "status": "success",
+        "year":   now.year,
+        "month":  now.month,
+        "day":    now.day,
+        "hour":   now.hour,
+        "minute": now.minute,
+        "second": now.second,
+        "date":   now.strftime("%Y-%m-%d"),
+        "time":   now.strftime("%H:%M:%S"),
+    })
 
 
 @app.route("/", methods=["GET"])
