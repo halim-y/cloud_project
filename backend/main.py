@@ -1,7 +1,11 @@
 from flask import Flask, request, jsonify, Response
 import os
+import requests
 from datetime import datetime, timezone, timedelta
-from weather import get_current_weather, get_forecast, parse_daily_forecast, parse_hourly_today
+from weather import (
+    get_current_weather, get_forecast,
+    parse_daily_forecast, parse_hourly_today, parse_hourly_upcoming,
+)
 from database import insert_row, get_latest_row
 from voice import process_voice_query
 from audio import transcribe, transcribe_bytes, synthesize, synthesize_bytes
@@ -162,9 +166,17 @@ def voice_audio_binary():
     if request.headers.get("X-Auth-Hash") != PASSWORD_HASH:
         return ("", 401)
 
-    raw = request.get_data()
-    if not raw:
-        return ("", 400)
+    raw = request.get_data() or b""
+
+    # No audio at all — treat as if STT returned empty so the user still
+    # gets a spoken response rather than an opaque HTTP error.
+    if len(raw) < 100:
+        reply = "I didn't catch that — could you try again?"
+        return Response(
+            synthesize_bytes(reply, fmt="wav"),
+            mimetype="audio/wav",
+            headers={"X-Transcript": "", "X-Response-Text": reply[:200]},
+        )
 
     # If the body is a WAV file, parse the sample rate from the header and
     # strip the header to leave raw PCM. Otherwise trust X-Sample-Rate.
@@ -244,12 +256,45 @@ def forecast():
     try:
         raw = get_forecast()
         return jsonify({
-            "status":       "success",
-            "daily":        parse_daily_forecast(raw),
-            "hourly_today": parse_hourly_today(raw),
+            "status":          "success",
+            "daily":           parse_daily_forecast(raw),
+            "hourly_today":    parse_hourly_today(raw),
+            "hourly_upcoming": parse_hourly_upcoming(raw, count=6),
         })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+_ICON_CACHE = {}  # in-memory cache of icon_code -> PNG bytes (populated on demand)
+
+
+@app.route("/weather-icon/<code>", methods=["GET"])
+def weather_icon(code):
+    """Proxy the OpenWeather icon PNG. The M5Stack hits this instead of
+    openweathermap.org directly — keeps the device's HTTPS traffic on a
+    single host (our backend) and lets us cache."""
+    # Defensive: icon codes are at most 4 chars, alnum only.
+    if not code or not code.replace(".", "").isalnum() or len(code) > 8:
+        return ("", 400)
+    code = code.replace(".png", "")
+    cached = _ICON_CACHE.get(code)
+    if cached is None:
+        try:
+            r = requests.get(
+                "https://openweathermap.org/img/wn/" + code + "@2x.png",
+                timeout=5,
+            )
+            if r.status_code != 200:
+                return ("", 502)
+            cached = r.content
+            _ICON_CACHE[code] = cached
+        except Exception:
+            return ("", 502)
+    return Response(
+        cached,
+        mimetype="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.route("/latest-row", methods=["GET"])

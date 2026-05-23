@@ -87,3 +87,27 @@ def parse_hourly_today(raw):
                 "description": item["weather"][0]["description"],
             })
     return result
+
+
+def parse_hourly_upcoming(raw, count=6):
+    """Next `count` 3-hour slots from now, regardless of date. Used by the
+    M5Stack hourly forecast view — keeps the screen full whether the user
+    opens it at 8 AM or 11 PM."""
+    now    = datetime.now(timezone.utc) + TZ_OFFSET
+    result = []
+    for item in raw["list"]:
+        dt = datetime.fromtimestamp(item["dt"], tz=timezone.utc) + TZ_OFFSET
+        if dt <= now:
+            continue
+        icon = item["weather"][0]["icon"]
+        result.append({
+            "time":        dt.strftime("%H:%M"),
+            "icon":        icon,
+            "emoji":       icon_to_emoji(icon),
+            "temp":        round(item["main"]["temp"], 1),
+            "humidity":    item["main"]["humidity"],
+            "description": item["weather"][0]["description"],
+        })
+        if len(result) >= count:
+            break
+    return result
