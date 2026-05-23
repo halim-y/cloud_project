@@ -42,6 +42,10 @@ def send_to_bigquery():
     except Exception as e:
         return jsonify({"status": "error", "message": "weather:" + str(e)[:40]}), 500
 
+    # outdoor_icon is for the dashboard UI only; the BigQuery table has
+    # no such column, so leaving it in causes a schema-mismatch error.
+    data.pop("outdoor_icon", None)
+
     errors = insert_row(data)
     if errors:
         return jsonify({"status": "error", "message": str(errors[0])[:60]}), 500
