@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 from weather import get_current_weather, get_forecast, parse_daily_forecast, parse_hourly_today
 from database import insert_row, get_latest_row
 from voice import process_voice_query
-from audio import transcribe, synthesize, synthesize_bytes
+from audio import transcribe, transcribe_bytes, synthesize, synthesize_bytes
 from announcements import compose as compose_announcement, ACTIONS
 
 PASSWORD_HASH = os.environ.get("PASSWORD_HASH")
@@ -145,6 +145,57 @@ def tts():
         return jsonify({"status": "success", "audio_b64": synthesize(text, fmt=fmt)})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)[:120]}), 500
+
+
+@app.route("/voice-audio-binary", methods=["POST"])
+def voice_audio_binary():
+    """Binary STT→Gemini→TTS endpoint for the M5Stack.
+
+    The device POSTs the recorded audio as the raw request body (either a
+    full WAV file or raw PCM with an X-Sample-Rate header). The response
+    body is the spoken answer as WAV bytes, with the transcript + response
+    text returned in headers so the device can render them on its LCD.
+
+    Auth is via the X-Auth-Hash header (PASSWORD_HASH), because we don't
+    want to base64 the body or wrap it in JSON just to carry the password.
+    """
+    if request.headers.get("X-Auth-Hash") != PASSWORD_HASH:
+        return ("", 401)
+
+    raw = request.get_data()
+    if not raw:
+        return ("", 400)
+
+    # If the body is a WAV file, parse the sample rate from the header and
+    # strip the header to leave raw PCM. Otherwise trust X-Sample-Rate.
+    if len(raw) >= 44 and raw[:4] == b"RIFF" and raw[8:12] == b"WAVE":
+        sample_rate = int.from_bytes(raw[24:28], "little")
+        idx = raw.find(b"data")
+        pcm = raw[idx + 8:] if idx >= 0 else raw[44:]
+    else:
+        sample_rate = int(request.headers.get("X-Sample-Rate", "16000"))
+        pcm = raw
+
+    try:
+        transcript = transcribe_bytes(pcm, sample_rate)
+        if not transcript:
+            reply = "I didn't catch that — could you try again?"
+            return Response(
+                synthesize_bytes(reply, fmt="wav"),
+                mimetype="audio/wav",
+                headers={"X-Transcript": "", "X-Response-Text": reply[:200]},
+            )
+        answer = process_voice_query(transcript)
+        return Response(
+            synthesize_bytes(answer, fmt="wav"),
+            mimetype="audio/wav",
+            headers={
+                "X-Transcript":    transcript[:200],
+                "X-Response-Text": answer[:200],
+            },
+        )
+    except Exception as e:
+        return (str(e)[:200], 500)
 
 
 @app.route("/voice-audio", methods=["POST"])

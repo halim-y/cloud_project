@@ -14,10 +14,10 @@ WAV_SAMPLE_RATE = 16000  # 16 kHz is a good fit for the M5Stack speaker and
                          # short spoken sentences.
 
 
-def transcribe(audio_b64: str, sample_rate: int) -> str:
-    audio_bytes = base64.b64decode(audio_b64)
+def transcribe_bytes(audio_bytes: bytes, sample_rate: int) -> str:
+    """Transcribe raw PCM bytes (LINEAR16) at the given sample rate."""
+    rate = sample_rate if sample_rate is not None else 16000
     audio = speech.RecognitionAudio(content=audio_bytes)
-    rate = sample_rate if sample_rate is not None else 48000
     config = speech.RecognitionConfig(
         encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
         sample_rate_hertz=rate,
@@ -29,6 +29,10 @@ def transcribe(audio_b64: str, sample_rate: int) -> str:
     if not resp.results:
         return ""
     return resp.results[0].alternatives[0].transcript.strip()
+
+
+def transcribe(audio_b64: str, sample_rate: int) -> str:
+    return transcribe_bytes(base64.b64decode(audio_b64), sample_rate)
 
 
 def _wav_wrap(pcm_bytes: bytes, sample_rate: int = WAV_SAMPLE_RATE,
