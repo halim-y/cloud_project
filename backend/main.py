@@ -354,6 +354,45 @@ def server_time():
     })
 
 
+@app.route("/next-trains", methods=["GET"])
+def next_trains():
+    """Next train connections from Genève Cornavin to Renens VD.
+    Proxies transport.opendata.ch — no API key required.
+    Returns up to 5 departures with time, line, platform and delay."""
+    frm = request.args.get("from", "Genève")
+    to  = request.args.get("to",   "Renens VD")
+    try:
+        r = requests.get(
+            "https://transport.opendata.ch/v1/connections",
+            params={"from": frm, "to": to, "transportations[]": "train", "limit": 5},
+            timeout=10,
+        )
+        data = r.json()
+        trains = []
+        for conn in data.get("connections", []):
+            f = conn.get("from") or {}
+            t = conn.get("to")   or {}
+            dep_raw = f.get("departure") or ""
+            arr_raw = t.get("arrival")   or ""
+            delay_s = f.get("delay")     or 0
+            # First section carries the line/train name
+            line = ""
+            secs = conn.get("sections") or []
+            if secs and secs[0].get("journey"):
+                j = secs[0]["journey"]
+                line = (j.get("name") or j.get("category") or "").strip()
+            trains.append({
+                "dep":      dep_raw[11:16] if len(dep_raw) >= 16 else "--:--",
+                "arr":      arr_raw[11:16] if len(arr_raw) >= 16 else "--:--",
+                "line":     line[:8],
+                "delay":    int(delay_s) // 60 if delay_s else 0,
+                "platform": str(f.get("platform") or "")[:3],
+            })
+        return jsonify({"status": "success", "trains": trains})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)[:120]}), 500
+
+
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "service": "IoT Weather Backend"})

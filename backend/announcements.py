@@ -9,13 +9,16 @@ than reading a fixed template. The decision *whether* to speak stays in
 Python so behaviour is predictable and testable.
 """
 import os
+import requests
 from datetime import datetime, timezone, timedelta
 from google.genai import types
 from database import get_latest_row
 from weather import get_forecast, parse_hourly_today, parse_daily_forecast
 from voice import gen_client, MODEL
 
-TZ_OFFSET = timedelta(hours=int(os.environ.get("TZ_OFFSET_HOURS", "2")))
+TZ_OFFSET  = timedelta(hours=int(os.environ.get("TZ_OFFSET_HOURS", "2")))
+TRAIN_FROM = os.environ.get("TRAIN_FROM", "Genève")
+TRAIN_TO   = os.environ.get("TRAIN_TO",   "Renens VD")
 
 ACTIONS = (
     "motion",            # auto-pick most relevant given current context
@@ -24,6 +27,7 @@ ACTIONS = (
     "rain_reminder",     # only if rain on the way in next 6 h
     "humidity_alert",    # only if indoor humidity outside 30-70 %
     "air_quality_alert", # only if TVOC > 500 ppb or eCO2 > 1500 ppm
+    "train_delay",       # only if morning trains are running late
 )
 
 SYSTEM = (
@@ -72,6 +76,55 @@ def _morning_window():
     return 6 <= now.hour < 11
 
 
+def _commute_window():
+    """True during the morning commute window: 07:30 – 10:00."""
+    now = datetime.now(timezone.utc) + TZ_OFFSET
+    mins = now.hour * 60 + now.minute
+    return 450 <= mins < 600  # 07:30 = 450, 10:00 = 600
+
+
+def _delayed_trains(window_hours=2):
+    """Return a list of delayed departures from TRAIN_FROM to TRAIN_TO
+    within the next window_hours. Each entry: {time, delay (min), line}.
+    Returns [] on any API or network error."""
+    try:
+        r = requests.get(
+            "https://transport.opendata.ch/v1/connections",
+            params={
+                "from": TRAIN_FROM,
+                "to":   TRAIN_TO,
+                "transportations[]": "train",
+                "limit": 8,
+            },
+            timeout=10,
+        )
+        data   = r.json()
+        now    = datetime.now(timezone.utc) + TZ_OFFSET
+        cutoff = now + timedelta(hours=window_hours)
+        delayed = []
+        for conn in data.get("connections", []):
+            f       = conn.get("from") or {}
+            dep_raw = f.get("departure") or ""
+            delay_s = f.get("delay") or 0
+            delay_m = int(delay_s) // 60 if delay_s else 0
+            if delay_m <= 0 or len(dep_raw) < 16:
+                continue
+            try:
+                dep_dt = datetime.fromisoformat(dep_raw)
+                if now <= dep_dt <= cutoff:
+                    line = ""
+                    secs = conn.get("sections") or []
+                    if secs and secs[0].get("journey"):
+                        j    = secs[0]["journey"]
+                        line = (j.get("name") or j.get("category") or "").strip()
+                    delayed.append({"time": dep_raw[11:16], "delay": delay_m, "line": line})
+            except Exception:
+                continue
+        return delayed
+    except Exception:
+        return []
+
+
 def _compose_current_summary(latest):
     if not latest:
         return None
@@ -91,7 +144,8 @@ def _compose_current_summary(latest):
 def _compose_morning(latest, hourly):
     if not latest:
         return None
-    rain = _rain_in_next_hours(hourly, hours=12)
+    rain          = _rain_in_next_hours(hourly, hours=12)
+    train_delays  = _delayed_trains(window_hours=3)
     return _phrase({
         "action":  "morning_briefing",
         "context": {
@@ -101,9 +155,15 @@ def _compose_morning(latest, hourly):
             "outdoor_weather": latest["outdoor_weather"],
             "rain_expected":   bool(rain),
             "rain_time":       rain["time"] if rain else None,
+            "train_delays":    train_delays,
+            "train_alert":     bool(train_delays),
         },
-        "intent": "Greet the user for the morning, summarize conditions, "
-                  "and mention if rain is expected today.",
+        "intent": (
+            "Greet the user for the morning, summarize indoor and outdoor "
+            "conditions, mention if rain is expected today. If train_alert is "
+            "true, also warn that morning trains to Renens are delayed and "
+            "state the worst departure time and delay in minutes."
+        ),
     })
 
 
@@ -154,6 +214,29 @@ def _compose_air_quality(latest):
     })
 
 
+def _compose_train_delay():
+    """Spoken alert if any trains on TRAIN_FROM→TRAIN_TO are delayed in the
+    next 2 hours. Returns None when all trains run on time (→ no announcement)."""
+    delayed = _delayed_trains(window_hours=2)
+    if not delayed:
+        return None
+    worst = max(delayed, key=lambda d: d["delay"])
+    return _phrase({
+        "action":  "train_delay",
+        "context": {
+            "route":          f"{TRAIN_FROM} → {TRAIN_TO}",
+            "delayed_trains": delayed,
+            "worst_dep":      worst["time"],
+            "worst_delay_min": worst["delay"],
+        },
+        "intent": (
+            f"Alert the user that their train from {TRAIN_FROM} to {TRAIN_TO} "
+            f"is running late. The {worst['time']} departure is delayed by "
+            f"{worst['delay']} minutes. Be concise and mention the departure time."
+        ),
+    })
+
+
 def compose(action: str):
     """Return the text to speak, or None if the action should be skipped."""
     if action not in ACTIONS:
@@ -177,11 +260,14 @@ def compose(action: str):
         return _compose_humidity(latest)
     if action == "air_quality_alert":
         return _compose_air_quality(latest)
+    if action == "train_delay":
+        return _compose_train_delay()
 
     # action == "motion": pick the most useful thing to say right now
     return (
         _compose_air_quality(latest)
         or _compose_humidity(latest)
+        or (_compose_train_delay() if _commute_window() else None)
         or _compose_rain(hourly)
         or (_compose_morning(latest, hourly) if _morning_window() else None)
         or _compose_current_summary(latest)
