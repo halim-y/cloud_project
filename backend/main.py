@@ -286,22 +286,28 @@ _ICON_CACHE = {}  # in-memory cache of icon_code -> PNG bytes (populated on dema
 def weather_icon(code):
     """Proxy the OpenWeather icon PNG. The M5Stack hits this instead of
     openweathermap.org directly — keeps the device's HTTPS traffic on a
-    single host (our backend) and lets us cache."""
+    single host (our backend) and lets us cache.
+
+    Query param `size=small` returns the 50x50 @1x icon (for forecast
+    rows). Default is the 100x100 @2x icon (for the HOME hero)."""
     # Defensive: icon codes are at most 4 chars, alnum only.
     if not code or not code.replace(".", "").isalnum() or len(code) > 8:
         return ("", 400)
     code = code.replace(".png", "")
-    cached = _ICON_CACHE.get(code)
+    size = request.args.get("size", "large")
+    suffix = "" if size == "small" else "@2x"
+    cache_key = code + suffix
+    cached = _ICON_CACHE.get(cache_key)
     if cached is None:
         try:
             r = requests.get(
-                "https://openweathermap.org/img/wn/" + code + "@2x.png",
+                "https://openweathermap.org/img/wn/" + code + suffix + ".png",
                 timeout=5,
             )
             if r.status_code != 200:
                 return ("", 502)
             cached = r.content
-            _ICON_CACHE[code] = cached
+            _ICON_CACHE[cache_key] = cached
         except Exception:
             return ("", 502)
     return Response(
