@@ -121,11 +121,12 @@ def announce_binary():
     if not _auth(body):
         return jsonify({"status": "error", "message": "Unauthorized"}), 401
     action = body.get("action", "motion")
+    force  = bool(body.get("force", False))
     if action not in ACTIONS:
         return jsonify({"status": "error",
                         "message": "Unknown action. Allowed: " + ", ".join(ACTIONS)}), 400
     try:
-        text = compose_announcement(action)
+        text = compose_announcement(action, force=force)
         if not text:
             # Condition not met (e.g. rain reminder on a sunny day).
             # 204 No Content — the device knows to play nothing.

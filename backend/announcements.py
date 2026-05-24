@@ -167,10 +167,17 @@ def _compose_morning(latest, hourly):
     })
 
 
-def _compose_rain(hourly):
+def _compose_rain(hourly, force=False):
     rain = _rain_in_next_hours(hourly, hours=6)
     if not rain:
-        return None
+        if not force:
+            return None
+        return _phrase({
+            "action":  "rain_reminder",
+            "context": {"rain_expected": False},
+            "intent":  "Reassure the user that no rain is expected in the next "
+                       "6 hours. Keep it brief and positive.",
+        })
     return _phrase({
         "action":  "rain_reminder",
         "context": {"rain_time": rain["time"], "description": rain["description"]},
@@ -179,12 +186,19 @@ def _compose_rain(hourly):
     })
 
 
-def _compose_humidity(latest):
+def _compose_humidity(latest, force=False):
     if not latest or latest.get("indoor_humidity") is None:
         return None
     h = latest["indoor_humidity"]
     if 30 <= h <= 70:
-        return None
+        if not force:
+            return None
+        return _phrase({
+            "action":  "humidity_alert",
+            "context": {"indoor_humidity": h},
+            "intent":  "Tell the user that indoor humidity is currently at a "
+                       "comfortable level. Mention the value.",
+        })
     intent = (
         "Alert that indoor air is too dry and suggest a glass of water or a "
         "humidifier."
@@ -199,13 +213,20 @@ def _compose_humidity(latest):
     })
 
 
-def _compose_air_quality(latest):
+def _compose_air_quality(latest, force=False):
     if not latest:
         return None
     tvoc = latest.get("air_quality_tvoc") or 0
     eco2 = latest.get("air_quality_eco2") or 0
     if tvoc <= 500 and eco2 <= 1500:
-        return None
+        if not force:
+            return None
+        return _phrase({
+            "action":  "air_quality_alert",
+            "context": {"air_quality_tvoc": tvoc, "air_quality_eco2": eco2},
+            "intent":  "Reassure the user that indoor air quality is currently "
+                       "good. Mention the TVOC and eCO2 values briefly.",
+        })
     return _phrase({
         "action":  "air_quality_alert",
         "context": {"air_quality_tvoc": tvoc, "air_quality_eco2": eco2},
@@ -214,12 +235,19 @@ def _compose_air_quality(latest):
     })
 
 
-def _compose_train_delay():
+def _compose_train_delay(force=False):
     """Spoken alert if any trains on TRAIN_FROM→TRAIN_TO are delayed in the
-    next 2 hours. Returns None when all trains run on time (→ no announcement)."""
+    next 2 hours. With force=True, always responds (reports on-time status too)."""
     delayed = _delayed_trains(window_hours=2)
     if not delayed:
-        return None
+        if not force:
+            return None
+        return _phrase({
+            "action":  "train_delay",
+            "context": {"route": f"{TRAIN_FROM} → {TRAIN_TO}", "delayed_trains": []},
+            "intent":  f"Tell the user that all trains from {TRAIN_FROM} to "
+                       f"{TRAIN_TO} are currently running on time.",
+        })
     worst = max(delayed, key=lambda d: d["delay"])
     return _phrase({
         "action":  "train_delay",
@@ -237,8 +265,10 @@ def _compose_train_delay():
     })
 
 
-def compose(action: str):
-    """Return the text to speak, or None if the action should be skipped."""
+def compose(action: str, force: bool = False):
+    """Return the text to speak, or None if the action should be skipped.
+    force=True makes conditional actions always respond with a status report
+    rather than silently skipping when their condition is not met."""
     if action not in ACTIONS:
         return None
 
@@ -255,15 +285,15 @@ def compose(action: str):
     if action == "morning_briefing":
         return _compose_morning(latest, hourly)
     if action == "rain_reminder":
-        return _compose_rain(hourly)
+        return _compose_rain(hourly, force=force)
     if action == "humidity_alert":
-        return _compose_humidity(latest)
+        return _compose_humidity(latest, force=force)
     if action == "air_quality_alert":
-        return _compose_air_quality(latest)
+        return _compose_air_quality(latest, force=force)
     if action == "train_delay":
-        return _compose_train_delay()
+        return _compose_train_delay(force=force)
 
-    # action == "motion": pick the most useful thing to say right now
+    # action == "motion": always conditional (never forced from auto-trigger)
     return (
         _compose_air_quality(latest)
         or _compose_humidity(latest)
