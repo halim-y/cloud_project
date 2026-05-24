@@ -59,6 +59,7 @@ def synthesize_bytes(text: str, fmt: str = "mp3") -> bytes:
         audio_cfg = texttospeech.AudioConfig(
             audio_encoding=texttospeech.AudioEncoding.LINEAR16,
             sample_rate_hertz=WAV_SAMPLE_RATE,
+            volume_gain_db=6.0,   # +6 dB boost for M5Stack speaker
         )
     else:
         audio_cfg = texttospeech.AudioConfig(
