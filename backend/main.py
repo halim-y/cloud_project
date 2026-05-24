@@ -26,6 +26,13 @@ def _server_time():
     return now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S")
 
 
+def _h(s, max_len=200):
+    """Sanitize a string for use in an HTTP header value.
+    HTTP/1.1 headers must be latin-1 encodable; LLM output often contains
+    em dashes, curly quotes, etc. that would crash Werkzeug's send_header."""
+    return s[:max_len].encode("latin-1", errors="replace").decode("latin-1")
+
+
 def _auth(body):
     return body.get("passwd") == PASSWORD_HASH
 
@@ -128,7 +135,7 @@ def announce_binary():
             wav_bytes,
             mimetype="audio/wav",
             headers={
-                "X-Announcement-Text":   text[:200],
+                "X-Announcement-Text":   _h(text),
                 "X-Announcement-Action": action,
             },
         )
@@ -175,7 +182,7 @@ def voice_audio_binary():
         return Response(
             synthesize_bytes(reply, fmt="wav"),
             mimetype="audio/wav",
-            headers={"X-Transcript": "", "X-Response-Text": reply[:200]},
+            headers={"X-Transcript": "", "X-Response-Text": _h(reply)},
         )
 
     # If the body is a WAV file, parse the sample rate from the header and
@@ -203,7 +210,7 @@ def voice_audio_binary():
         return Response(
             synthesize_bytes(reply, fmt="wav"),
             mimetype="audio/wav",
-            headers={"X-Transcript": "", "X-Response-Text": reply[:200]},
+            headers={"X-Transcript": "", "X-Response-Text": _h(reply)},
         )
 
     try:
@@ -216,8 +223,8 @@ def voice_audio_binary():
             synthesize_bytes(answer, fmt="wav"),
             mimetype="audio/wav",
             headers={
-                "X-Transcript":    transcript[:200],
-                "X-Response-Text": answer[:200],
+                "X-Transcript":    _h(transcript),
+                "X-Response-Text": _h(answer),
             },
         )
     except Exception as e:
