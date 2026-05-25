@@ -73,7 +73,10 @@ def synthesize_bytes(text: str, fmt: str = "mp3") -> bytes:
     )
     payload = resp.audio_content
     if fmt == "wav":
-        payload = _wav_wrap(payload)
+        # Google TTS LINEAR16 already returns a RIFF/WAV-wrapped file.
+        # Only add our own header if it came back as raw PCM (no RIFF magic).
+        if payload[:4] != b"RIFF":
+            payload = _wav_wrap(payload)
     return payload
 
 
