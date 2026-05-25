@@ -26,7 +26,7 @@ def _server_time():
     return now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S")
 
 
-def _h(s, max_len=200):
+def _h(s, max_len=500):
     """Sanitize a string for use in an HTTP header value.
     HTTP/1.1 headers must be latin-1 encodable; LLM output often contains
     em dashes, curly quotes, etc. that would crash Werkzeug's send_header."""
@@ -93,12 +93,13 @@ def announce():
     if not _auth(body):
         return jsonify({"status": "error", "message": "Unauthorized"}), 401
     action = body.get("action", "motion")
+    force  = bool(body.get("force", False))
     fmt    = body.get("format", "mp3")
     if action not in ACTIONS:
         return jsonify({"status": "error",
                         "message": "Unknown action. Allowed: " + ", ".join(ACTIONS)}), 400
     try:
-        text = compose_announcement(action)
+        text = compose_announcement(action, force=force)
         if not text:
             return jsonify({"status": "skip", "action": action, "reason": "condition not met"})
         return jsonify({
