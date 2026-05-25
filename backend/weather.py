@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from collections import Counter, defaultdict
 from datetime import datetime, timezone, timedelta
@@ -11,6 +12,14 @@ CITY      = os.environ.get("CITY", "Genève")
 BASE_URL  = "http://api.openweathermap.org/data/2.5"
 TZ_OFFSET = timedelta(hours=int(os.environ.get("TZ_OFFSET_HOURS", "2")))
 
+_current_cache      = None
+_current_cache_time = 0.0
+_CURRENT_TTL        = 300   # 5 min
+
+_forecast_cache      = None
+_forecast_cache_time = 0.0
+_FORECAST_TTL        = 600  # 10 min
+
 ICON_EMOJI = {
     "01": "☀️", "02": "⛅", "03": "☁️", "04": "☁️",
     "09": "🌧️", "10": "🌦️", "11": "⛈️", "13": "❄️", "50": "🌫️",
@@ -22,23 +31,35 @@ def icon_to_emoji(icon_code):
 
 
 def get_current_weather():
+    global _current_cache, _current_cache_time
+    if _current_cache is not None and time.time() - _current_cache_time < _CURRENT_TTL:
+        return _current_cache
     url = f"{BASE_URL}/weather?q={CITY}&appid={OPENWEATHER_API_KEY}&units=metric"
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
     body = resp.json()
-    return {
+    result = {
         "outdoor_temp":     round(float(body["main"]["temp"]), 1),
         "outdoor_humidity": round(float(body["main"]["humidity"]), 1),
         "outdoor_weather":  body["weather"][0]["description"],
         "outdoor_icon":     body["weather"][0]["icon"],
     }
+    _current_cache      = result
+    _current_cache_time = time.time()
+    return result
 
 
 def get_forecast():
+    global _forecast_cache, _forecast_cache_time
+    if _forecast_cache is not None and time.time() - _forecast_cache_time < _FORECAST_TTL:
+        return _forecast_cache
     url = f"{BASE_URL}/forecast?q={CITY}&appid={OPENWEATHER_API_KEY}&units=metric"
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
-    return resp.json()
+    result = resp.json()
+    _forecast_cache      = result
+    _forecast_cache_time = time.time()
+    return result
 
 
 def parse_daily_forecast(raw):

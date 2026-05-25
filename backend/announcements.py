@@ -9,7 +9,9 @@ than reading a fixed template. The decision *whether* to speak stays in
 Python so behaviour is predictable and testable.
 """
 import os
+import time
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from google.genai import types
 from database import get_latest_row
@@ -19,6 +21,9 @@ from voice import gen_client, MODEL
 TZ_OFFSET  = timedelta(hours=int(os.environ.get("TZ_OFFSET_HOURS", "2")))
 TRAIN_FROM = os.environ.get("TRAIN_FROM", "Genève")
 TRAIN_TO   = os.environ.get("TRAIN_TO",   "Renens VD")
+
+_train_cache: dict = {}   # (from, to, window_hours) -> (timestamp, result)
+_TRAIN_TTL = 120          # 2 min — train delays change slowly
 
 ACTIONS = (
     "motion",            # auto-pick most relevant given current context
@@ -87,6 +92,10 @@ def _delayed_trains(window_hours=2):
     """Return a list of delayed departures from TRAIN_FROM to TRAIN_TO
     within the next window_hours. Each entry: {time, delay (min), line}.
     Returns [] on any API or network error."""
+    cache_key = (TRAIN_FROM, TRAIN_TO, window_hours)
+    cached = _train_cache.get(cache_key)
+    if cached and time.time() - cached[0] < _TRAIN_TTL:
+        return cached[1]
     try:
         r = requests.get(
             "https://transport.opendata.ch/v1/connections",
@@ -120,6 +129,7 @@ def _delayed_trains(window_hours=2):
                     delayed.append({"time": dep_raw[11:16], "delay": delay_m, "line": line})
             except Exception:
                 continue
+        _train_cache[cache_key] = (time.time(), delayed)
         return delayed
     except Exception:
         return []
@@ -272,13 +282,23 @@ def compose(action: str, force: bool = False):
     if action not in ACTIONS:
         return None
 
-    latest = get_latest_row()
-    hourly = []
-    if action in ("morning_briefing", "rain_reminder", "motion"):
-        try:
-            hourly = parse_hourly_today(get_forecast())
-        except Exception:
-            hourly = []
+    needs_forecast = action in ("morning_briefing", "rain_reminder", "motion")
+    if needs_forecast:
+        # Fetch BigQuery row and OWM forecast in parallel — both are cached after
+        # the first call so this mainly helps on cold starts.
+        def _fetch_hourly():
+            return parse_hourly_today(get_forecast())
+        with ThreadPoolExecutor(max_workers=2) as _ex:
+            _fut_latest = _ex.submit(get_latest_row)
+            _fut_hourly = _ex.submit(_fetch_hourly)
+            latest = _fut_latest.result()
+            try:
+                hourly = _fut_hourly.result()
+            except Exception:
+                hourly = []
+    else:
+        latest = get_latest_row()
+        hourly = []
 
     if action == "current_summary":
         return _compose_current_summary(latest)
