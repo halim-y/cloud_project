@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y \
 
 COPY ./requirements.txt ./
 COPY ./main.py ./
-COPY ./weather.py ./
-COPY ./database.py ./
-COPY ./voice.py ./
-COPY ./audio.py ./
-COPY ./announcements.py ./
+COPY services/weather.py ./
+COPY services/database.py ./
+COPY services/voice.py ./
+COPY services/audio.py ./
+COPY services/announcements.py ./
 
 RUN pip3 install -r requirements.txt
 

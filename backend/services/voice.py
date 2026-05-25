@@ -2,7 +2,7 @@ import os
 from google import genai
 from google.genai import types
 from google.cloud.bigquery import QueryJobConfig
-from database import client as _bq, BQ_TABLE, GCP_PROJECT
+from backend.services.database import client as _bq, BQ_TABLE, GCP_PROJECT
 from weather import (
     get_forecast as _fetch_forecast,
     parse_daily_forecast,

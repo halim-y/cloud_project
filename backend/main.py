@@ -2,14 +2,14 @@ from flask import Flask, request, jsonify, Response
 import os
 import requests
 from datetime import datetime, timezone, timedelta
-from weather import (
+from backend.services.weather import (
     get_current_weather, get_forecast,
     parse_daily_forecast, parse_hourly_today, parse_hourly_upcoming,
 )
-from database import insert_row, get_latest_row
-from voice import process_voice_query
-from audio import transcribe, transcribe_bytes, synthesize, synthesize_bytes
-from announcements import compose as compose_announcement, ACTIONS
+from backend.services.database import insert_row, get_latest_row
+from backend.services.voice import process_voice_query
+from backend.services.audio import transcribe, synthesize
+from backend.services.announcements import compose as compose_announcement, ACTIONS
 
 PASSWORD_HASH = os.environ.get("PASSWORD_HASH")
 if not PASSWORD_HASH:
@@ -24,13 +24,6 @@ app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB cap on POST bodies
 def _server_time():
     now = datetime.now(timezone.utc) + TZ_OFFSET
     return now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S")
-
-
-def _h(s, max_len=500):
-    """Sanitize a string for use in an HTTP header value.
-    HTTP/1.1 headers must be latin-1 encodable; LLM output often contains
-    em dashes, curly quotes, etc. that would crash Werkzeug's send_header."""
-    return s[:max_len].encode("latin-1", errors="replace").decode("latin-1")
 
 
 def _auth(body):
@@ -113,38 +106,6 @@ def announce():
         return jsonify({"status": "error", "message": str(e)[:120]}), 500
 
 
-@app.route("/announce-binary", methods=["POST"])
-def announce_binary():
-    """Same as /announce but returns the WAV bytes directly with
-    Content-Type: audio/wav. Designed for the M5Stack so the device can
-    skip JSON parsing and base64 decoding of a large payload."""
-    body = request.get_json(force=True)
-    if not _auth(body):
-        return jsonify({"status": "error", "message": "Unauthorized"}), 401
-    action = body.get("action", "motion")
-    force  = bool(body.get("force", False))
-    if action not in ACTIONS:
-        return jsonify({"status": "error",
-                        "message": "Unknown action. Allowed: " + ", ".join(ACTIONS)}), 400
-    try:
-        text = compose_announcement(action, force=force)
-        if not text:
-            # Condition not met (e.g. rain reminder on a sunny day).
-            # 204 No Content — the device knows to play nothing.
-            return ("", 204)
-        wav_bytes = synthesize_bytes(text, fmt="wav")
-        return Response(
-            wav_bytes,
-            mimetype="audio/wav",
-            headers={
-                "X-Announcement-Text":   _h(text),
-                "X-Announcement-Action": action,
-            },
-        )
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)[:120]}), 500
-
-
 @app.route("/tts", methods=["POST"])
 def tts():
     body = request.get_json(force=True)
@@ -158,79 +119,6 @@ def tts():
         return jsonify({"status": "success", "audio_b64": synthesize(text, fmt=fmt)})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)[:120]}), 500
-
-
-@app.route("/voice-audio-binary", methods=["POST"])
-def voice_audio_binary():
-    """Binary STT→Gemini→TTS endpoint for the M5Stack.
-
-    The device POSTs the recorded audio as the raw request body (either a
-    full WAV file or raw PCM with an X-Sample-Rate header). The response
-    body is the spoken answer as WAV bytes, with the transcript + response
-    text returned in headers so the device can render them on its LCD.
-
-    Auth is via the X-Auth-Hash header (PASSWORD_HASH), because we don't
-    want to base64 the body or wrap it in JSON just to carry the password.
-    """
-    if request.headers.get("X-Auth-Hash") != PASSWORD_HASH:
-        return ("", 401)
-
-    raw = request.get_data() or b""
-
-    # No audio at all — treat as if STT returned empty so the user still
-    # gets a spoken response rather than an opaque HTTP error.
-    if len(raw) < 100:
-        reply = "I didn't catch that — could you try again?"
-        return Response(
-            synthesize_bytes(reply, fmt="wav"),
-            mimetype="audio/wav",
-            headers={"X-Transcript": "", "X-Response-Text": _h(reply)},
-        )
-
-    # If the body is a WAV file, parse the sample rate from the header and
-    # strip the header to leave raw PCM. Otherwise trust X-Sample-Rate.
-    if len(raw) >= 44 and raw[:4] == b"RIFF" and raw[8:12] == b"WAVE":
-        sample_rate = int.from_bytes(raw[24:28], "little")
-        idx = raw.find(b"data")
-        pcm = raw[idx + 8:] if idx >= 0 else raw[44:]
-    else:
-        sample_rate = int(request.headers.get("X-Sample-Rate", "16000"))
-        pcm = raw
-
-    # Defensive: any failure in transcribe/Gemini/TTS still returns 200 +
-    # a spoken "didn't catch that" so the device never has to surface a raw
-    # error to the user. We only 500 if TTS itself fails (which it won't
-    # for short fixed strings).
-    transcript = ""
-    try:
-        transcript = transcribe_bytes(pcm, sample_rate)
-    except Exception:
-        transcript = ""
-
-    if not transcript:
-        reply = "I didn't catch that — could you try again?"
-        return Response(
-            synthesize_bytes(reply, fmt="wav"),
-            mimetype="audio/wav",
-            headers={"X-Transcript": "", "X-Response-Text": _h(reply)},
-        )
-
-    try:
-        answer = process_voice_query(transcript)
-    except Exception:
-        answer = "Sorry, something went wrong while I was thinking."
-
-    try:
-        return Response(
-            synthesize_bytes(answer, fmt="wav"),
-            mimetype="audio/wav",
-            headers={
-                "X-Transcript":    _h(transcript),
-                "X-Response-Text": _h(answer),
-            },
-        )
-    except Exception as e:
-        return (str(e)[:200], 500)
 
 
 @app.route("/voice-audio", methods=["POST"])
