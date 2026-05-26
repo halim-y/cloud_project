@@ -8,6 +8,7 @@ import unit
 import time
 import os
 import ntptime
+import gc
 from machine import I2C, Pin, RTC
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -22,13 +23,11 @@ SEND_INTERVAL_S     = 300    # send sensor data every 5 minutes
 OUTDOOR_INTERVAL_S  = 300    # refresh outdoor weather every 5 minutes
 FORECAST_INTERVAL_S = 600    # forecast cache lifetime — 10 min
 ANNOUNCE_COOLDOWN_S = 3600   # at most one motion announcement per hour
-ANSWER_HOLD_S       = 8      # how long ANSWER screen stays after audio ends
 ANN_HOLD_S          = 2      # how long ANNOUNCEMENT stays after audio ends
 TZ_OFFSET_HOURS     = 2      # local timezone offset applied after NTP sync
 
 # File paths on the device's flash
 ICONS_DIR         = "/flash/icons"
-ANSWER_WAV_FILE   = "/flash/answer.wav"
 ANNOUNCE_WAV_FILE = "/flash/announce.wav"
 
 # Visual palette — picked to feel like the dashboard's dark glassmorphism look
@@ -49,7 +48,6 @@ S_HOME         = "home"
 S_FORECAST     = "forecast"
 S_TRAINS       = "trains"
 S_ACTIONS      = "actions"
-S_ANSWER       = "answer"
 S_ANNOUNCEMENT = "announcement"
 S_OFFLINE      = "offline"
 
@@ -458,6 +456,7 @@ def play_announcement(action, force=False):
     Returns (text, reason); text is None on skip/error, "" if audio
     downloaded but text unavailable."""
     global last_announce_status
+    gc.collect()
     try:
         body = {"passwd": PASSWORD_HASH, "action": action, "format": "wav"}
         if force:
@@ -890,7 +889,7 @@ def draw_actions():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# State drawing — ANSWER / ANNOUNCEMENT / OFFLINE
+# State drawing —  ANNOUNCEMENT / OFFLINE
 # ─────────────────────────────────────────────────────────────────────────────
 def wrap_lines(text, width=30, max_lines=4):
     """Tiny word-wrap for MicroPython — splits on spaces, no fancy
@@ -1183,7 +1182,7 @@ while True:
             draw_loading("Refreshing...")
             fetch_trains()
             go(S_TRAINS)
-        elif state in (S_ANSWER, S_ANNOUNCEMENT):
+        elif state in (S_ANNOUNCEMENT):
             go(S_HOME)
     if btnB.wasPressed():
         if state == S_HOME:
@@ -1196,12 +1195,12 @@ while True:
             draw_loading("Fetching trains...")
             fetch_trains()
             go(S_TRAINS)
-        elif state in (S_ANSWER, S_ANNOUNCEMENT, S_TRAINS):
+        elif state in (S_ANNOUNCEMENT, S_TRAINS):
             go(S_HOME)
     if btnC.wasPressed():
         if state in (S_HOME, S_FORECAST):
             toggle_home_forecast()
-        elif state in (S_ANSWER, S_ANNOUNCEMENT, S_TRAINS, S_ACTIONS):
+        elif state in (S_ANNOUNCEMENT, S_TRAINS, S_ACTIONS):
             go(S_HOME)
 
     # 9. Animation tick

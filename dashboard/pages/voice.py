@@ -255,12 +255,12 @@ QUESTIONS = [
     "What's the humidity trend?",
 ]
 ANNOUNCEMENTS = [
-    ("motion",            "🚶 Auto-pick"),
-    ("current_summary",   "🌡️ Current summary"),
-    ("morning_briefing",  "🌅 Morning briefing"),
-    ("rain_reminder",     "☔ Rain reminder"),
-    ("humidity_alert",    "💧 Humidity alert"),
-    ("air_quality_alert", "🌫️ Air quality alert"),
+    ("motion",           "🚶 Auto-pick"),
+    ("current_summary",  "🌡️ Current summary"),
+    ("morning_briefing", "🌅 Morning briefing"),
+    ("rain_reminder",    "☔ Rain reminder"),
+    ("humidity_alert",   "💧 Humidity alert"),
+    ("train_delay",      "🚆 Train alert"),
 ]
 
 with st.expander("⚡ Quick actions", expanded=False):

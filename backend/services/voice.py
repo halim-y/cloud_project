@@ -1,4 +1,5 @@
 import os
+import requests as _requests
 from google import genai
 from google.genai import types
 from google.cloud.bigquery import QueryJobConfig
@@ -8,6 +9,9 @@ from weather import (
     parse_daily_forecast,
     parse_hourly_today,
 )
+
+TRAIN_FROM = os.environ.get("TRAIN_FROM", "Genève")
+TRAIN_TO   = os.environ.get("TRAIN_TO",   "Renens VD")
 
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "europe-west1")
 MODEL        = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
@@ -60,7 +64,7 @@ units (°C, %, ppb, ppm).
 
 {SCHEMA_DOC}
 
-You have two tools:
+You have three tools:
 
   • `run_query` — for any LOGGED sensor data in BigQuery. Readings arrive every
     5 minutes, so the LATEST row IS the current indoor/outdoor state. Use this
@@ -73,10 +77,17 @@ You have two tools:
     "what's the weather tomorrow", "this afternoon's forecast"). Returns a
     5-day daily forecast and today's hourly forecast.
 
+  • `get_trains` — for LIVE train/transit departures between two Swiss stations.
+    Use for any question about trains, buses, trams, departures, delays, or
+    commute times. The default route is {TRAIN_FROM} → {TRAIN_TO}. The user
+    can specify a different route (e.g. "from Lausanne to Bern").
+    Returns up to 5 upcoming departures with departure time, arrival time,
+    line, delay in minutes (0 = on time), platform, and trip duration.
+
 If a question covers both (e.g. "what's the weather today" — current state +
 later forecast), call both tools and combine. If the data is missing, say so
-plainly. If a question is not about the home environment or weather, politely
-decline.
+plainly. If a question is not about the home environment, weather, or trains,
+politely decline.
 
 Examples to guide tool choice:
   • "What's the weather today?" → call BOTH `run_query` (latest row for
@@ -88,6 +99,9 @@ Examples to guide tool choice:
     time DESC LIMIT 6, infer the direction.
   • "What time does CO2 usually peak?" → `run_query` GROUP BY hour, ORDER
     BY AVG(air_quality_eco2) DESC LIMIT 1.
+  • "When is the next train?" → `get_trains` with default from/to.
+  • "Is any train late?" → `get_trains`, check delay > 0.
+  • "Next train from Lausanne to Bern?" → `get_trains` with from=Lausanne, to=Bern.
 
 When the user asks a follow-up like "and yesterday?" or "what about humidity?",
 resolve the pronoun/subject from the preceding turns in this conversation
@@ -135,6 +149,53 @@ def _get_forecast():
         return {"error": f"forecast unavailable: {str(e)[:80]}"}
 
 
+def _get_trains(frm: str = "", to: str = ""):
+    frm = frm.strip() or TRAIN_FROM
+    to  = to.strip()  or TRAIN_TO
+    try:
+        r = _requests.get(
+            "https://transport.opendata.ch/v1/connections",
+            params={"from": frm, "to": to, "limit": 5},
+            timeout=10,
+        )
+        data = r.json()
+        trains = []
+        for conn in data.get("connections", []):
+            f       = conn.get("from") or {}
+            t       = conn.get("to")   or {}
+            dep_raw = f.get("departure") or ""
+            arr_raw = t.get("arrival")   or ""
+            delay_s = f.get("delay")     or 0
+            dep_str = dep_raw[11:16] if len(dep_raw) >= 16 else "--:--"
+            arr_str = arr_raw[11:16] if len(arr_raw) >= 16 else "--:--"
+            duration_min = None
+            try:
+                dh, dm = int(dep_str[:2]), int(dep_str[3:])
+                ah, am = int(arr_str[:2]), int(arr_str[3:])
+                dur = (ah * 60 + am) - (dh * 60 + dm)
+                duration_min = dur + 1440 if dur < 0 else dur
+            except Exception:
+                pass
+            line = ""
+            secs = conn.get("sections") or []
+            if secs and secs[0].get("journey"):
+                j        = secs[0]["journey"]
+                category = (j.get("category") or "").strip()
+                number   = (j.get("number")   or "").strip()
+                line     = f"{category} {number}".strip() or (j.get("name") or "")[:8]
+            trains.append({
+                "dep":      dep_str,
+                "arr":      arr_str,
+                "line":     line[:10],
+                "delay":    int(delay_s) // 60 if delay_s else 0,
+                "platform": str(f.get("platform") or "")[:3],
+                "duration": duration_min,
+            })
+        return {"from": frm, "to": to, "trains": trains}
+    except Exception as e:
+        return {"error": f"train data unavailable: {str(e)[:80]}"}
+
+
 _TOOLS = types.Tool(function_declarations=[
     types.FunctionDeclaration(
         name="run_query",
@@ -157,6 +218,25 @@ _TOOLS = types.Tool(function_declarations=[
                     "hourly) from OpenWeather. Use for future weather "
                     "(today, tomorrow, this week, umbrella, rain coming).",
         parameters=types.Schema(type="OBJECT", properties={}),
+    ),
+    types.FunctionDeclaration(
+        name="get_trains",
+        description="Live train/transit departures between two Swiss stations "
+                    "from transport.opendata.ch. Use for any question about "
+                    "trains, departures, delays, or commute times.",
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "from": types.Schema(
+                    type="STRING",
+                    description=f"Departure station name (default: {TRAIN_FROM}).",
+                ),
+                "to": types.Schema(
+                    type="STRING",
+                    description=f"Arrival station name (default: {TRAIN_TO}).",
+                ),
+            },
+        ),
     ),
 ])
 
@@ -221,6 +301,8 @@ def process_voice_query(text: str, history=None) -> str:
                 result = _run_query(args.get("sql", ""))
             elif fc.name == "get_forecast":
                 result = _get_forecast()
+            elif fc.name == "get_trains":
+                result = _get_trains(args.get("from", ""), args.get("to", ""))
             else:
                 result = {"error": f"unknown tool: {fc.name}"}
             contents.append(types.Content(role="user", parts=[

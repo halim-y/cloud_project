@@ -246,15 +246,20 @@ def server_time():
 
 @app.route("/next-trains", methods=["GET"])
 def next_trains():
-    """Next train connections from Genève Cornavin to Renens VD.
+    """Next connections between two stops.
     Proxies transport.opendata.ch — no API key required.
-    Returns up to 5 departures with time, line, platform and delay."""
-    frm = request.args.get("from", "Genève")
-    to  = request.args.get("to",   "Renens VD")
+    Returns up to 5 departures with time, line, platform and delay.
+    ?type=train|bus|tram|all  (default: train, for M5Stack compatibility)"""
+    frm  = request.args.get("from", "Genève")
+    to   = request.args.get("to",   "Renens VD")
+    kind = request.args.get("type", "train")
+    params = {"from": frm, "to": to, "limit": 5}
+    if kind != "all":
+        params["transportations[]"] = kind
     try:
         r = requests.get(
             "https://transport.opendata.ch/v1/connections",
-            params={"from": frm, "to": to, "transportations[]": "train", "limit": 5},
+            params=params,
             timeout=10,
         )
         data = r.json()
@@ -265,18 +270,64 @@ def next_trains():
             dep_raw = f.get("departure") or ""
             arr_raw = t.get("arrival")   or ""
             delay_s = f.get("delay")     or 0
-            # First section carries the line/train name
+            dep_str = dep_raw[11:16] if len(dep_raw) >= 16 else "--:--"
+            arr_str = arr_raw[11:16] if len(arr_raw) >= 16 else "--:--"
+
+            # Duration in minutes from HH:MM strings
+            duration_min = None
+            try:
+                dh, dm = int(dep_str[:2]), int(dep_str[3:])
+                ah, am = int(arr_str[:2]), int(arr_str[3:])
+                dur = (ah * 60 + am) - (dh * 60 + dm)
+                duration_min = dur + 1440 if dur < 0 else dur
+            except Exception:
+                pass
+
+            # First section for summary line/category
             line = ""
+            category = ""
             secs = conn.get("sections") or []
             if secs and secs[0].get("journey"):
                 j = secs[0]["journey"]
-                line = (j.get("name") or j.get("category") or "").strip()
+                category = (j.get("category") or "").strip()
+                number   = (j.get("number")   or "").strip()
+                line = f"{category} {number}".strip() or (j.get("name") or "")[:8]
+
+            # Build per-leg details (skip walk sections with no journey)
+            legs = []
+            for sec in secs:
+                j2 = sec.get("journey")
+                if not j2:
+                    continue
+                sec_dep = sec.get("departure") or {}
+                sec_arr = sec.get("arrival")   or {}
+                stn_from = ((sec_dep.get("station") or {}).get("name") or "").strip()
+                stn_to   = ((sec_arr.get("station") or {}).get("name") or "").strip()
+                t_dep    = (sec_dep.get("departure") or "")
+                t_arr    = (sec_arr.get("arrival")   or "")
+                cat2     = (j2.get("category") or "").strip()
+                num2     = (j2.get("number")   or "").strip()
+                line2    = f"{cat2} {num2}".strip() or "—"
+                direction = (j2.get("to") or "").strip()
+                legs.append({
+                    "from":      stn_from[:35],
+                    "to":        stn_to[:35],
+                    "dep":       t_dep[11:16] if len(t_dep) >= 16 else "—",
+                    "arr":       t_arr[11:16] if len(t_arr) >= 16 else "—",
+                    "line":      line2[:10],
+                    "category":  cat2,
+                    "direction": direction[:40],
+                })
+
             trains.append({
-                "dep":      dep_raw[11:16] if len(dep_raw) >= 16 else "--:--",
-                "arr":      arr_raw[11:16] if len(arr_raw) >= 16 else "--:--",
-                "line":     line[:8],
-                "delay":    int(delay_s) // 60 if delay_s else 0,
-                "platform": str(f.get("platform") or "")[:3],
+                "dep":         dep_str,
+                "arr":         arr_str,
+                "line":        line[:10],
+                "category":    category,
+                "delay":       int(delay_s) // 60 if delay_s else 0,
+                "platform":    str(f.get("platform") or "")[:3],
+                "duration":    duration_min,
+                "legs":        legs,
             })
         return jsonify({"status": "success", "trains": trains})
     except Exception as e:
