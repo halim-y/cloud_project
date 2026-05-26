@@ -168,7 +168,7 @@ The M5Stack Core2 device shows a multi-screen UI driven by physical buttons and 
 | `dashboard/pages/history.py` | Date-range chart explorer |
 | `m5stack/m5stack.py` | MicroPython — sensors, display, motion, announcements |
 
-**BigQuery table:** `acoustic-rider-487915-s8.cloud_project.weather-records`  
+**BigQuery table:** `YOUR_GCP_PROJECT_ID.cloud_project.weather-records`  
 Schema: `date, time, indoor_temp, indoor_humidity, air_quality_tvoc, air_quality_eco2, outdoor_temp, outdoor_humidity, outdoor_weather`
 
 ---
@@ -198,7 +198,7 @@ Schema: `date, time, indoor_temp, indoor_humidity, air_quality_tvoc, air_quality
 | `OPENWEATHER_API_KEY` | ✅ | — | OpenWeather API key |
 | `CITY` | — | `Genève` | City for outdoor weather |
 | `TZ_OFFSET_HOURS` | — | `2` | Local UTC offset (e.g. `2` for CEST) |
-| `GCP_PROJECT` | — | `acoustic-rider-487915-s8` | GCP project ID |
+| `GCP_PROJECT` | — | `YOUR_GCP_PROJECT_ID` | GCP project ID |
 | `GCP_LOCATION` | — | `europe-west1` | Vertex AI region |
 | `TRAIN_FROM` | — | `Genève` | Default departure station |
 | `TRAIN_TO` | — | `Renens VD` | Default arrival station |
@@ -289,7 +289,7 @@ The device runs MicroPython via UIFlow. No compilation needed — paste and run.
 4. Switch to **Python mode** (the `</>` tab)
 5. Open `m5stack/m5stack.py` and update the two constants at the top:
    ```python
-   FLASK_URL     = "https://cloud-project-470570889014.europe-west6.run.app"
+   FLASK_URL     = "https://YOUR_BACKEND_URL.run.app"
    PASSWORD_HASH = "<your-sha256-hash>"   # same hash as the backend
    ```
 6. Paste the full file into UIFlow and click **Run**
@@ -305,7 +305,7 @@ All commands run in **Cloud Shell** (the `>_` button in the GCP Console).
 ### 0. Initial setup
 
 ```bash
-gcloud config set project acoustic-rider-487915-s8
+gcloud config set project YOUR_GCP_PROJECT_ID
 gcloud config set run/region europe-west6
 
 # Clone the repo (skip if already present)
@@ -333,7 +333,7 @@ gcloud run deploy cloud-project \
 
 First build takes ~2–3 minutes. When it finishes, smoke-test the endpoint:
 ```bash
-curl https://cloud-project-470570889014.europe-west6.run.app/
+curl https://YOUR_BACKEND_URL.run.app/
 # Expected: {"service":"IoT Weather Backend","status":"ok"}
 ```
 
@@ -345,7 +345,7 @@ gcloud run deploy cloud-project-dashboard \
   --region europe-west6 \
   --allow-unauthenticated \
   --session-affinity \
-  --set-env-vars "PASSWORD_HASH=$PASSWORD_HASH,FLASK_URL=https://cloud-project-470570889014.europe-west6.run.app"
+  --set-env-vars "PASSWORD_HASH=$PASSWORD_HASH,FLASK_URL=https://YOUR_BACKEND_URL.run.app"
 ```
 
 `--session-affinity` is required — Streamlit stores chat state in memory per instance, so requests from the same browser session must reach the same container.
@@ -412,10 +412,10 @@ Things we would tackle with more time:
 
 | Resource          | Value                                                     |
 |-------------------|-----------------------------------------------------------|
-| GCP project       | `acoustic-rider-487915-s8`                                |
+| GCP project       | `YOUR_GCP_PROJECT_ID`                                     |
 | Cloud Run region  | `europe-west6`                                            |
 | Vertex AI region  | `europe-west1`                                            |
 | Backend service   | `cloud-project`                                           |
-| Backend URL       | `https://cloud-project-470570889014.europe-west6.run.app` |
+| Backend URL       | `https://YOUR_BACKEND_URL.run.app`                        |
 | Dashboard service | `cloud-project-dashboard`                                 |
-| BigQuery table    | `acoustic-rider-487915-s8.cloud_project.weather-records`  |
+| BigQuery table    | `YOUR_GCP_PROJECT_ID.cloud_project.weather-records`       |
