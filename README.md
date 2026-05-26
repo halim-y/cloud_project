@@ -37,7 +37,7 @@ Gen AI (Claude Code) was used in this assignment for code generation, debugging,
 
 ### Video walkthrough
 
-> 📹 **[Video placeholder — link to be added]**
+[![Watch the video](https://markdown-videos-api.jorgenkh.no/youtube/nOtoQZQ7Z4E)](https://youtu.be/nOtoQZQ7Z4E)
 
 ---
 

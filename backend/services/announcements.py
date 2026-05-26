@@ -70,7 +70,7 @@ def _rain_in_next_hours(hourly_today, hours=6):
             except Exception:
                 continue
             now = datetime.now(timezone.utc) + TZ_OFFSET
-            slot = datetime.combine(now.date(), h_time)
+            slot = datetime.combine(now.date(), h_time, tzinfo=timezone.utc)
             if now <= slot <= cutoff:
                 return h
     return None
