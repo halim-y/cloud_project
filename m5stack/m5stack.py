@@ -15,7 +15,7 @@ from machine import I2C, Pin, RTC
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 FLASK_URL     = "https://cloud-project-470570889014.europe-west6.run.app"
-PASSWORD_HASH = "f4f263e439cf40925e6a412387a9472a6773c2580212a4fb50d224d3a817de17"
+PASSWORD_HASH = "YOUR_HASH_PASSWORD"
 
 # Sensor + announcement cadences. The 5-minute sensor send is the project
 # requirement; everything else is just convenience polling.
